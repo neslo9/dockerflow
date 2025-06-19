@@ -1,0 +1,51 @@
+- name: Get existing versions from Harbor
+  uri:
+    url: "https://{{ harbor_url }}/api/v2.0/projects/{{ project }}/repositories/{{ service_name | urlencode }}/artifacts"
+    method: GET
+    user: "admin"
+    password: "Password123"  # Replace with actual credentials
+    force_basic_auth: yes
+    status_code: 200
+    validate_certs: no
+  register: harbor_versions
+  changed_when: false
+
+- name: Extract existing version numbers
+  set_fact:
+    existing_versions: |
+      {% set versions = [] %}
+      {% for artifact in harbor_versions.json %}
+        {% if artifact.tags %}
+          {% for tag in artifact.tags %}
+            {% if tag.name is match('^v\\d+$') %}
+              {% set _ = versions.append(tag.name | regex_replace('^v', '') | int) %}
+            {% endif %}
+          {% endfor %}
+        {% endif %}
+      {% endfor %}
+      {{ versions }}
+
+- name: Calculate next version
+  set_fact:
+    next_version: "{{ (existing_versions | default([]) | max | default(0) | int + 1 }}"
+
+- name: Create new tag
+  set_fact:
+    new_tag: "v{{ next_version }}"
+    remote_image: "{{ harbor_url }}/{{ project }}/{{ service_name }}:v{{ next_version }}"
+
+- name: Tag and push image
+  block:
+    - name: Tag image
+      command: docker tag {{ target_image }} {{ remote_image }}
+      
+    - name: Push image
+      command: docker push {{ remote_image }}
+      environment:
+        DOCKER_CONFIG: "/home/hypervisoradmin/.docker"
+
+- name: Record deployment
+  lineinfile:
+    path: "{{ log_file }}"
+    line: "{{ lookup('pipe', 'date +%Y-%m-%dT%H:%M:%S') }},{{ service_name }},{{ new_tag }},{{ service_status }}"
+    create: yes
