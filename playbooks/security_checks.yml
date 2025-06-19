@@ -1,0 +1,161 @@
+---
+- name: Gather container info
+  community.docker.docker_container_info:
+    name: "{{ target_container }}"
+  register: container_info
+  failed_when: false  
+ 
+- name: Initialize security check statuses
+  set_fact:
+    resource_check: "OK"
+    network_check: "OK"
+    privileges_check: "OK"
+    rootless_check: "OK"
+    healthcheck_check: "OK"
+    container_found: false
+
+
+- name: Check if container info exists
+  set_fact:
+    container_found: true
+  when: container_info.container is defined
+
+# Only run checks if container was found
+- block:
+    # Resource limits validation
+    - name: Check resource limits are set
+      assert:
+        that:
+          - container_info.container.HostConfig.Memory > 0
+          - container_info.container.HostConfig.NanoCpus > 0
+        fail_msg: "Resource limits (Memory: {{ container_info.container.HostConfig.Memory|default(0)|int / 1048576 }}MB, CPU: {{ container_info.container.HostConfig.NanoCpus|default(0)|int / 1000000000 }} cores)"
+      register: check_resources
+      ignore_errors: yes
+
+    - name: Add resource limits issue
+      when: check_resources is failed
+      set_fact:
+        security_issues: "{{ security_issues + [check_resources.msg] }}"
+      changed_when: check_resources is failed
+
+    - name: Update resource check status
+      set_fact:
+        resource_check: "{{ 'FAILED' if check_resources is failed else 'OK' }}"
+
+    # Network validation
+    - name: Check network segmentation
+      assert:
+        that:
+          - container_info.container.HostConfig.NetworkMode == expected_network
+        fail_msg: "Network should be '{{ expected_network }}'. Current: {{ container_info.container.HostConfig.NetworkMode|default('undefined') }}"
+      register: check_network
+      ignore_errors: yes
+
+    - name: Add network segmentation issue
+      when: check_network is failed
+      set_fact:
+        security_issues: "{{ security_issues + [check_network.msg] }}"
+      changed_when: check_network is failed
+
+    - name: Update network check status
+      set_fact:
+        network_check: "{{ 'FAILED' if check_network is failed else 'OK' }}"
+
+    # Privileges validation
+    - name: Check container privileges are limited
+      assert:
+        that:
+          - not container_info.container.HostConfig.Privileged|default(false)
+          - "'no-new-privileges:true' in (container_info.container.HostConfig.SecurityOpt | default([]))"
+          - "'ALL' in (container_info.container.HostConfig.CapDrop | default([]))"
+        fail_msg: "Security issues - Privileged: {{ container_info.container.HostConfig.Privileged|default('undefined') }}, SecurityOpt: {{ container_info.container.HostConfig.SecurityOpt|default([]) }}, CapDrop: {{ container_info.container.HostConfig.CapDrop|default([]) }}"
+      register: check_privileges
+      ignore_errors: yes
+
+    - name: Add privileges issue
+      when: check_privileges is failed
+      set_fact:
+        security_issues: "{{ security_issues + [check_privileges.msg] }}"
+      changed_when: check_privileges is failed
+
+    - name: Update privileges check status
+      set_fact:
+        privileges_check: "{{ 'FAILED' if check_privileges is failed else 'OK' }}"
+
+    # Rootless validation
+    - name: Check if container runs as non-root (UID)
+      shell: docker exec {{ container_name }} id -u
+      register: container_uid
+      changed_when: false
+      ignore_errors: yes
+
+    - name: Set rootless_check and optionally add security issue
+      set_fact:
+       rootless_check: "{{ 'OK' if container_uid.stdout != '0' else 'FAILED' }}"
+       security_issues: "{{ security_issues + ['Container runs as root (UID=0)'] if container_uid.stdout == '0' else security_issues }}"
+
+    # Healthcheck validation
+    - name: Check healthcheck is configured
+      assert:
+        that:
+          - container_info.container.Config.Healthcheck is defined
+          - "'Test' in container_info.container.Config.Healthcheck"
+        fail_msg: "Healthcheck not configured. Status: {{ 'defined' if container_info.container.Config.Healthcheck is defined else 'undefined' }}"
+      register: check_healthcheck
+      ignore_errors: yes
+
+    - name: Add healthcheck issue
+      when: check_healthcheck is failed
+      set_fact:
+        security_issues: "{{ security_issues + [check_healthcheck.msg] }}"
+      changed_when: check_healthcheck is failed
+
+    - name: Update healthcheck check status
+      set_fact:
+        healthcheck_check: "{{ 'FAILED' if check_healthcheck is failed else 'OK' }}"
+
+# Vulnerability scanning (always runs)
+- name: Install Trivy if not installed
+  shell: |
+    curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
+  args:
+    creates: /usr/local/bin/trivy
+
+- name: Scan image for vulnerabilities (JSON)
+  command: trivy image --severity CRITICAL,HIGH -f json {{ target_image }}
+  register: trivy_json
+  failed_when: false
+  changed_when: false
+
+- name: Scan image for vulnerabilities (plain output)
+  command: trivy image --severity CRITICAL,HIGH {{ target_image }}
+  register: trivy_raw
+  failed_when: false
+  changed_when: false
+
+- name: Parse Trivy JSON output
+  set_fact:
+    trivy_parsed: "{{ trivy_json.stdout | from_json }}"
+  ignore_errors: yes
+
+- name: Extract CRITICAL & HIGH vulnerabilities
+  set_fact:
+    trivy_vulns: >-
+      {{
+        trivy_parsed.Results
+        | json_query("[].Vulnerabilities[?Severity=='CRITICAL' || Severity=='HIGH']")
+        | sum(start=[])
+      }}
+
+- name: Count CRITICAL and HIGH vulnerabilities
+  set_fact:
+    critical_vulns: "{{ trivy_vulns | selectattr('Severity', 'equalto', 'CRITICAL') | list | length }}"
+    high_vulns: "{{ trivy_vulns | selectattr('Severity', 'equalto', 'HIGH') | list | length }}"
+
+- name: Create individual vulnerability issues
+  set_fact:
+    security_issues: "{{ security_issues + ['Vulnerability: ' + item.PkgName + ' - ' + item.VulnerabilityID + ' (' + item.Severity + ')'] }}"
+  loop: "{{ trivy_vulns }}"
+  loop_control:
+    loop_var: item
+  when: trivy_vulns | length > 0
