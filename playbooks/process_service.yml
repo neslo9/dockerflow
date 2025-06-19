@@ -1,0 +1,126 @@
+- name: Extract just this service’s config
+  set_fact:
+    this_service: "{{ service_config[service] }}"
+
+- name: Initialize service variables for {{ service }}
+  set_fact:
+    service_image:  "{{ this_service.image     }}"
+    container_name: "{{ this_service.container_name }}"
+    security_issues: []
+    critical_vulns: 0
+    high_vulns:     0
+    build_status:   "pending"
+
+- name: Set backup dir and tag
+  set_fact:
+    backup_tag: "backup-{{ timestamp }}"
+    service_backup_dir: "{{ backup_dir }}/{{ service }}"
+- name: Backup existing image if exists
+  block:
+    - name: Check for existing image
+      community.docker.docker_image_info:
+        name: "{{ service_image }}"
+      register: old_image
+      ignore_errors: yes
+
+    - name: Set backup image name
+      set_fact:
+        image_name_only: "{{ service_image.split(':')[0] }}"
+      when: old_image.images | length > 0
+
+    - name: Tag old image as backup with timestamp
+      command: >
+        docker tag {{ service_image }} {{ image_name_only }}:{{ backup_tag }}
+      when: old_image.images | length > 0
+
+    - name: Save old image to backup_dir (.tar)
+      shell: >
+        docker save {{ image_name_only }}:{{ backup_tag }} 
+        -o "{{ service_backup_dir }}/{{ service }}_{{ backup_tag }}.tar"
+      args:
+        executable: /bin/bash
+      when: old_image.images | length > 0
+  rescue:
+    - debug:
+        msg: "No existing image for {{ service }}"
+
+- name: Build service image
+  block:
+    - name: Build Docker image
+      community.docker.docker_image:
+        name: "{{ service_image }}"
+        source: build
+        force_source: true
+        build:
+          path: "{{ repo_dir }}/{{ service_config.build.context | default('.') }}"
+          dockerfile: "{{ service_config.build.dockerfile | default('Dockerfile') }}"
+          args: "{{ service_config.build.args | default(omit) }}"
+      
+    - name: Update image reference after build
+      set_fact:
+        # Important: This updates the image reference to use the newly built image
+        service_image: "{{ service_image }}"
+        build_status: "built"
+  rescue:
+    - name: Handle build failure
+      set_fact:
+        build_status: "failed"
+        security_issues: "{{ security_issues + ['Build failed'] }}"
+
+- name: Start containers
+  community.docker.docker_compose_v2:
+    project_src: "{{ repo_dir }}"
+    state: present
+    project_name: "{{ repo_name }}"
+  when: build_status == 'built'
+
+- name: Get new container ID
+  shell: |
+    docker ps -qf "name={{ container_name }}" | head -1
+  register: new_container_id
+  changed_when: false
+  when: build_status == 'built'
+
+
+- name: Run security checks
+  include_tasks: security_checks.yml
+  when: build_status == 'built'
+  vars:
+    target_container: "{{ container_name }}"
+    target_image: "{{ service_image }}"
+
+- name: Set service status
+  set_fact:
+    service_status: >-
+      {% if build_status != 'built' %}build-failed
+      {% elif security_issues | length > 0 or critical_vulns | int > 0 or high_vulns | int > 0 %}
+        waiting for approve
+      {% else %}
+        approved
+      {% endif %}
+
+- name: Build service summary
+  set_fact:
+    service_summary: 
+      build_status: "{{ build_status }}"
+      status: "{{ service_status }}"
+      security_checks:
+        resource_limits: "{{ resource_check | default('N/A') }}"
+        network: "{{ network_check | default('N/A') }}"
+        privileges: "{{ privileges_check | default('N/A') }}"
+        rootless: "{{ rootless_check | default('N/A') }}"
+        healthcheck: "{{ healthcheck_check | default('N/A') }}"
+      critical_vulns: "{{ critical_vulns }}"
+      high_vulns: "{{ high_vulns }}"
+      issues: "{{ security_issues }}"
+      image_source: "{{ 'Locally built' if build_status == 'built' else service_config.image }}"
+
+- name: Update global service summaries
+  set_fact:
+    service_summaries: "{{ service_summaries | combine({service: service_summary}) }}"
+
+- name: Tag and push if approved
+  include_tasks: tag_and_push.yml
+  when: 
+    - build_status == 'built'
+    - service_status == "approved"
