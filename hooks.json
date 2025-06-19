@@ -1,0 +1,23 @@
+[
+  {
+    "id": "deploy",
+    "execute-command":        "/usr/local/bin/dockerflow_config/scripts/deploy.sh",
+    "command-working-directory": "/home/hypervisoradmin/project",
+    "pass-arguments-to-command": [
+      {
+        "source": "payload",
+        "name":   "repository.name"
+      }
+    ],
+    "response-message": "Deploy script triggered for {{ .repository.name }}!",
+    "trigger-rule": {
+      "match": {
+        "type":  "value",
+        "value": "push",
+        "parameter": {
+          "source": "header",
+          "name":   "X-Gitea-Event"
+        }
+      }
+    }
+  }
