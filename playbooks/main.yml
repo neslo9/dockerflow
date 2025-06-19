@@ -1,0 +1,107 @@
+---
+- name: Container Security & Deployment Pipeline
+  hosts: localhost
+  collections:
+    - community.docker
+  connection: local
+  become: yes
+
+  vars:
+    project: "project"
+    project_root: "/home/hypervisoradmin/{{ project }}"
+    repo_name: "my-repo"
+    repo_dir: "{{ project_root }}/{{ repo_name }}"
+    harbor_url: "192.168.122.100"
+    gitea_url: "192.168.122.40:3000"
+    token: ""
+    expected_network: "{{ repo_name }}_app_net"
+    backup_dir: "backup/{{ repo_name }}"
+    timestamp: "{{ lookup('pipe', 'date +%Y%m%d%H%M%S') }}"
+    log_file: "/var/log/dockerflow/history.csv"
+    service_summaries: {}
+
+  tasks:
+    - name: Ensure directories exist
+      file:
+        path: "{{ item }}"
+        state: directory
+      loop:
+        - "{{ repo_dir }}"
+        - "{{ backup_dir }}"
+        - "/var/log/dockerflow"
+
+    - name: Clone repository
+      git:
+        repo: "http://hyperadmin:{{ token }}@{{ gitea_url }}/hyperadmin/{{ repo_name }}.git"
+        dest: "{{ repo_dir }}"
+        version: test
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Parse Docker Compose in‑line
+    # ─────────────────────────────────────────────────────────────────────────
+
+    - name: Read Docker Compose file
+      slurp:
+        src: "{{ repo_dir }}/docker-compose.yaml"
+      register: compose_file
+
+    - name: Decode & parse compose YAML
+      set_fact:
+        compose_config: "{{ compose_file.content | b64decode | from_yaml }}"
+
+    - name: Find all services that have a build section
+      set_fact:
+        built_services: >-
+          {{
+            compose_config.services
+            | dict2items
+            | selectattr('value.build','defined')
+            | map(attribute='key')
+            | list
+          }}
+
+    - name: Expose raw service definitions
+      set_fact:
+        service_config: "{{ compose_config.services }}"
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Now process each built service
+    # ─────────────────────────────────────────────────────────────────────────
+
+    - name: Process built services
+      include_tasks: process_service.yml
+      loop: "{{ built_services }}"
+      loop_control:
+        loop_var: service
+
+    - name: Display final deployment summary
+      debug:
+        msg: |
+          {% for service_name, summary in service_summaries.items() %}
+          ===== Service: {{ service_name }} =====
+          Build Status:       {{ summary.build_status | upper }}
+          Approval Status:    {{ summary.status | upper }}
+          
+          Security Checks:
+            - Resource Limits: {{ summary.security_checks.resource_limits }}
+            - Network ({{ expected_network }}): {{ summary.security_checks.network }}
+            - Privileges: {{ summary.security_checks.privileges }}
+            - Rootless User: {{ summary.security_checks.rootless }}
+            - Healthcheck: {{ summary.security_checks.healthcheck }}
+
+          Security Issues: {{ summary.issues | length }}
+          CRITICAL Vulnerabilities: {{ summary.critical_vulns }}
+          HIGH Vulnerabilities:     {{ summary.high_vulns }}
+          
+          {% if summary.issues %}
+          Security Issues:
+          {% for issue in summary.issues %}
+            - {{ issue }}
+          {% endfor %}
+          {% endif %}
+          
+          {% if summary.build_status == 'skipped' %}
+          Image Source: {{ summary.image_source }}
+          {% endif %}
+          =====================================
+          {% endfor %}
