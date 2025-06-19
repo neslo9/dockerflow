@@ -1,0 +1,355 @@
+- name: Container Security & Deployment Pipeline with Image Backup and Sequential Tagging
+  hosts: localhost
+  collections:
+    - community.docker
+  connection: local
+  become: yes
+
+  vars:
+    project: "project"
+    project_root: "/home/hypervisoradmin/{{ project }}"
+    repo_name: "my-repo"
+    repo_dir: "{{ project_root }}/{{ repo_name }}"
+    image_name: "{{ repo_name }}"
+    image_local: "{{ repo_name }}:latest"
+    container_name: "{{ repo_name }}"
+    expected_network: "{{ repo_name }}_app_net"
+    gitea_url: "192.168.122.40:3000"
+    harbor_url: "192.168.122.100"
+    token: ""
+    issues: []
+    trivy_vulns: []
+    vuln_critical: 0
+    vuln_high: 0
+    vuln_list: []  # Stores individual vulnerability issues
+    backup_dir: "backup/{{ repo_name }}"
+    timestamp: "{{ lookup('pipe', 'date +%Y%m%d%H%M%S') }}"
+    status: ""
+
+  tasks:
+    - name: Ensure project directory exists
+      file:
+        path: "{{ repo_dir }}"
+        state: directory
+
+    - name: Ensure backup directory exists
+      file:
+        path: "{{ backup_dir }}"
+        state: directory
+
+    - name: Check if old image exists locally
+      community.docker.docker_image_info:
+        name: "{{ image_name }}:latest"
+      register: old_image
+      ignore_errors: yes
+
+    - name: Set backup tag with timestamp
+      set_fact:
+        backup_tag: "backup-{{ timestamp }}"
+      when: old_image.images | length > 0
+
+    - name: Tag old image as backup with timestamp
+      command: >
+        docker tag {{ image_name }}:latest {{ image_name }}:{{ backup_tag }}
+      when: old_image.images | length > 0
+
+    - name: Save old image to backup_dir (.tar)
+      shell: >
+        docker save {{ image_name }}:{{ backup_tag }} \
+        -o "{{ backup_dir }}/{{ image_name }}_{{ backup_tag }}.tar"
+      args:
+        executable: /bin/bash
+      when: old_image.images | length > 0
+    
+    - name: Clone latest code from Gitea repository
+      git:
+        repo: "http://hyperadmin:{{ token }}@{{ gitea_url }}/hyperadmin/{{ repo_name }}.git"
+        dest: "{{ repo_dir }}"
+        version: test
+
+    
+    - name: Install Python requirements
+      pip:
+        requirements: "{{ repo_dir }}/requirements.txt"
+        virtualenv: "{{ repo_dir }}/venv"
+        virtualenv_command: /usr/bin/python3 -m venv
+      ignore_errors: yes
+
+    - name: Build Docker image
+      community.docker.docker_image:
+        name: "{{ image_name }}"
+        source: build
+        force_source: true
+        build:
+          path: "{{ repo_dir }}"
+
+    - name: Stop and remove existing container
+      community.docker.docker_compose_v2:
+        project_src: "{{ repo_dir }}"
+        state: absent
+        remove_orphans: yes
+      ignore_errors: yes
+
+    - name: Start new container
+      community.docker.docker_compose_v2:
+        project_src: "{{ repo_dir }}"
+        state: present
+        project_name: "{{ repo_name }}"
+
+    - name: Retrieve container info
+      community.docker.docker_container_info:
+        name: "{{ container_name }}"
+      register: container_info
+      failed_when: container_info.container is undefined
+
+    # Validation checks
+    - name: Check resource limits are set
+      assert:
+        that:
+          - container_info.container.HostConfig.Memory > 0
+          - container_info.container.HostConfig.NanoCpus > 0
+        fail_msg: "Resource limits (Memory: {{ container_info.container.HostConfig.Memory|default(0)|int / 1048576 }}MB, CPU: {{ container_info.container.HostConfig.NanoCpus|default(0)|int / 1000000000 }} cores)"
+      register: check_resources
+      ignore_errors: yes
+
+    - name: Add resource limits issue
+      when: check_resources is failed
+      set_fact:
+        issues: "{{ issues + [check_resources.msg] }}"
+
+    - name: Check network segmentation
+      assert:
+        that:
+          - container_info.container.HostConfig.NetworkMode == expected_network
+        fail_msg: "Network should be '{{ expected_network }}'. Current: {{ container_info.container.HostConfig.NetworkMode|default('undefined') }}"
+      register: check_network
+      ignore_errors: yes
+
+    - name: Add network segmentation issue
+      when: check_network is failed
+      set_fact:
+        issues: "{{ issues + [check_network.msg] }}"
+
+    - name: Check container privileges are limited
+      assert:
+        that:
+          - not container_info.container.HostConfig.Privileged|default(false)
+          - "'no-new-privileges:true' in (container_info.container.HostConfig.SecurityOpt | default([]))"
+          - "'ALL' in (container_info.container.HostConfig.CapDrop | default([]))"
+        fail_msg: "Security issues - Privileged: {{ container_info.container.HostConfig.Privileged|default('undefined') }}, SecurityOpt: {{ container_info.container.HostConfig.SecurityOpt|default([]) }}, CapDrop: {{ container_info.container.HostConfig.CapDrop|default([]) }}"
+      register: check_privileges
+      ignore_errors: yes
+
+    - name: Add privileges issue
+      when: check_privileges is failed
+      set_fact:
+        issues: "{{ issues + [check_privileges.msg] }}"
+
+    - name: Check container is running rootless
+      assert:
+        that:
+          - container_info.container.Config.User is defined
+          - container_info.container.Config.User != "0:0"
+        fail_msg: "User should be non-root (UID:GID). Current: {{ container_info.container.Config.User|default('undefined') }}"
+      register: check_rootless
+      ignore_errors: yes
+
+    - name: Add rootless issue
+      when: check_rootless is failed
+      set_fact:
+        issues: "{{ issues + [check_rootless.msg] }}"
+
+    - name: Check healthcheck is configured
+      assert:
+        that:
+          - container_info.container.Config.Healthcheck is defined
+          - "'Test' in container_info.container.Config.Healthcheck"
+        fail_msg: "Healthcheck not configured. Status: {{ 'defined' if container_info.container.Config.Healthcheck is defined else 'undefined' }}"
+      register: check_healthcheck
+      ignore_errors: yes
+
+    - name: Add healthcheck issue
+      when: check_healthcheck is failed
+      set_fact:
+        issues: "{{ issues + [check_healthcheck.msg] }}"
+
+    - name: Install Trivy if not installed
+      shell: |
+        curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
+      args:
+        creates: /usr/local/bin/trivy
+
+    - name: Scan image for vulnerabilities (JSON)
+      command: trivy image --severity CRITICAL,HIGH -f json {{ image_name }}
+      register: trivy_json
+      failed_when: false
+      changed_when: false
+
+    - name: Scan image for vulnerabilities (plain output)
+      command: trivy image --severity CRITICAL,HIGH {{ image_name }}
+      register: trivy_raw
+      failed_when: false
+      changed_when: false
+
+    - name: Parse Trivy JSON output
+      set_fact:
+        trivy_parsed: "{{ trivy_json.stdout | from_json }}"
+      ignore_errors: yes
+
+    - name: Extract CRITICAL & HIGH vulnerabilities
+      set_fact:
+        trivy_vulns: >-
+          {{
+            trivy_parsed.Results
+            | json_query("[].Vulnerabilities[?Severity=='CRITICAL' || Severity=='HIGH']")
+            | sum(start=[])
+          }}
+
+    - name: Count CRITICAL and HIGH vulnerabilities
+      set_fact:
+        vuln_critical: "{{ trivy_vulns | selectattr('Severity', 'equalto', 'CRITICAL') | list | length }}"
+        vuln_high: "{{ trivy_vulns | selectattr('Severity', 'equalto', 'HIGH') | list | length }}"
+
+    - name: Create individual vulnerability issues
+      set_fact:
+        issues: "{{ issues + ['Vulnerability: ' + item.PkgName + ' - ' + item.VulnerabilityID + ' (' + item.Severity + ')'] }}"
+      loop: "{{ trivy_vulns }}"
+      loop_control:
+        loop_var: item
+      when: trivy_vulns | length > 0
+
+    # Final status determination
+    - name: Set deployment status
+      set_fact:
+        status: >-
+          {% if issues|length > 0 or vuln_critical|int > 0 or vuln_high|int > 0 %}
+            waiting for approve
+          {% else %}
+            approved
+          {% endif %}
+    - name: Get image ID
+      command: docker images -q {{ image_name }}:latest
+      register: image_id_result
+      changed_when: false
+
+    - name: Log deployment status
+      shell: |
+       mkdir -p /var/log/dockerflow
+       echo "$(date +'%Y-%m-%d %H:%M:%S'),{{ image_name }},{{ status | trim }},{{ image_id_result.stdout | trim }}" >> /var/log/dockerflow/history.csv
+
+    - name: Get image ID of local image
+      command: docker images -q {{ full_image }}
+      register: image_id_result
+      changed_when: false
+      when: status == "approved"
+
+    - name: Set image_id fact
+      set_fact:
+        image_id: "{{ image_id_result.stdout }}"
+      when: 
+        - status == "approved"
+        - image_id_result.stdout != ""
+
+    - name: Get all local tags for this image ID
+      shell: >
+        docker images --format '{{ "{{.Repository}}:{{.Tag}} {{.ID}}" }}'
+        | grep -E "{{ image_id }}$" || true
+      register: existing_tags
+      changed_when: false
+      when: status == "approved"
+
+    - name: Extract existing vN tags into a list of ints
+      set_fact:
+        version_numbers: >-
+          {{ (existing_tags.stdout_lines | default([]))
+             | select("search", harbor_url + '/' + project + '/' + image_name + ':v\\d+$')
+             | map("regex_search", 'v(\\d+)$', '\\1')
+             | map("int")
+             | list
+          }}
+      when: status == "approved"
+
+    - name: Compute max_version (0 if none exist)
+      set_fact:
+        max_version: >-
+          {{ (version_numbers | length > 0)
+             | ternary(version_numbers | max, 0)
+          }}
+      when: status == "approved"
+
+    - name: Compute next_version
+      set_fact:
+        next_version: "{{ (max_version | default(0) | int) + 1 }}"
+      when: status == "approved"
+
+    - name: Set tag_name
+      set_fact:
+        tag_name: "v{{ next_version }}"
+      when: status == "approved"
+
+    - name: Set remote_tag
+      set_fact:
+        remote_tag: "{{ harbor_url }}/{{ project }}/{{ image_name }}:{{ tag_name }}"
+      when: status == "approved"
+
+    - name: Tag approved image
+      command: docker tag {{ full_image }} {{ remote_tag }}
+      when: status == "approved"
+
+    - name: Push approved image to Harbor
+      community.docker.docker_image:
+        name: "{{ remote_tag }}"
+        push: yes
+        source: local
+      environment:
+        DOCKER_CONFIG: "/home/hypervisoradmin/.docker"
+      when: status == "approved"
+
+    - name: Save remote_tag to backup file
+      lineinfile:
+        path: "{{ backup_dir }}/tagged_images_{{ timestamp }}.txt"
+        create: yes
+        line: "{{ remote_tag }}"
+      when: status == "approved"
+
+    - name: Ensure log directory exists
+      file:
+        path: "{{ log_file | dirname }}"
+        state: directory
+      when: status == "approved"
+
+    - name: Log approved image info to CSV
+      lineinfile:
+        path: "{{ log_file }}"
+        create: yes
+        line: >
+          {{ lookup('pipe', "date +'%Y-%m-%d %H:%M:%S'") }},
+          {{ image_name }},
+          {{ tag_name }},
+          {{ image_id }}
+      when: status == "approved"
+
+    # Final report with approval status
+    - name: Final summary with approval status
+      debug:
+        msg: |
+          ===== Deployment Summary =====
+          Approval Status:   {{ status | upper }}
+          
+          Security Checks:
+            - Resource Limits: {{ "OK" if check_resources is success else "FAILED" }}
+            - Network ({{ expected_network }}): {{ "OK" if check_network is success else "FAILED" }}
+            - Privileges: {{ "OK" if check_privileges is success else "FAILED" }}
+            - Rootless User: {{ "OK" if check_rootless is success else "FAILED" }}
+            - Healthcheck: {{ "OK" if check_healthcheck is success else "FAILED" }}
+
+          Security Issues: {{ issues | length }}
+          CRITICAL Vulnerabilities: {{ vuln_critical }}
+          HIGH Vulnerabilities: {{ vuln_high }}
+          
+          {% if issues %}
+          Security Issues:
+          {% for issue in issues %}
+            - {{ issue }}
+          {% endfor %}
+          {% endif %}
