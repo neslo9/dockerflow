@@ -1,0 +1,25 @@
+---
+- name: Read Docker Compose file
+  slurp:
+    src: "{{ repo_dir }}/docker-compose.yaml"
+  register: compose_file
+
+
+- name: Parse Docker Compose
+  set_fact:
+    compose_config: "{{ compose_file.content | b64decode | from_yaml }}"
+
+- name: Extract services with build section
+  set_fact:
+    built_services: >-
+      {{
+        compose_config.services
+        | dict2items
+        | selectattr('value.build', 'defined')
+        | map(attribute='key')
+        | list
+      }}
+
+- name: Extract service configurations
+  set_fact:
+    service_config: "{{ compose_config.services }}"
