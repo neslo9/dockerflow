@@ -1,0 +1,59 @@
+#!/bin/bash
+
+show_help() {
+  echo "Commands:"
+  echo "  vm-spawn          Start a new VM"
+  echo "  vm-delete         Delete a VM"
+  echo "  vm-connect        Connect to a VM"
+  echo "  vm-start          Start a VM"
+  echo "  vm-list           Lists all VMs"
+  echo "  image-logs        List ansible pipline logs (tests) of docker image"
+  echo "  image-list        List of tested images" 
+  echo "  image-approve     Approve and push image to Harbor"
+  echo "  masternode-spawn  Start and configure Node with Harbor and minikube"
+  echo ""
+}
+# Show help if no arguments or help flag
+if [[ $# -eq 0 || "$1" == "--help" || "$1" == "-h" ]]; then
+  show_help
+  exit 0
+fi
+
+# Extract subcommand and shift args
+subcommand="$1"
+shift
+
+case "$subcommand" in
+  vm-spawn)
+    /usr/local/bin/dockerflow_config/scripts/vm_spawn.sh "$@"
+    ;;
+  vm-delete)
+    /usr/local/bin/dockerflow_config/scripts/vm_delete.sh "$@"
+    ;;
+  vm-connect)
+    /usr/local/bin/dockerflow_config/scripts/vm_connect.sh "$@"
+    ;;
+  vm-start)
+    /usr/local/bin/dockerflow_config/scripts/vm_start.sh "$@"
+    ;;
+  vm-list)
+    /usr/local/bin/dockerflow_config/scripts/vm_list.sh "$@"
+    ;;
+  image-logs)
+    /usr/local/bin/dockerflow_config/scripts/deploy_logs_list.sh "$@"
+    ;;
+  image-list)
+    /usr/local/bin/dockerflow_config/scripts/image_list.sh "$@"
+    ;;
+  image-approve)
+    /usr/local/bin/dockerflow_config/scripts/image_approve.sh "$@"
+    ;;
+  masternode-spawn)
+    /usr/local/bin/dockerflow_config/scripts/node_spawn.sh "$@"
+    ;;
+   *)
+    echo "Error: Unknown command '$subcommand'"
+    show_help
+    exit 1
+    ;;
+esac
