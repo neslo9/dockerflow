@@ -1,3 +1,4 @@
+
 #!/bin/bash
 set -euo pipefail
 
@@ -12,7 +13,7 @@ Options:
   -m RAM w MB (default 2048)
   -v vcpus Number of vCPU (default 2)
   -s disk size in GB (default 20)
-  -u path to cloud-init user-data 
+  -u path to cloud-init user-data
   -d path to cloud-init meta-data
   -w path to cloud-init network-config
   -h show this message
@@ -21,12 +22,12 @@ EOF
 }
 
 # Domyślne wartości
-image="Fedora-Cloud-Base-40-1.14.x86_64.qcow2"
+image="Fedora-Cloud-Base-Generic.x86_64-40-1.14.qcow2"
 format="qcow2"
-memory=2048
-vcpus=2
-size=20
-user_data="/usr/local/bin/dockerflow_config/cloud-init/user-data"
+memory=6144
+vcpus=4
+size=50
+user_data="/usr/local/bin/dockerflow_config/cloud-init/node-data-docker"
 meta_data="/usr/local/bin/dockerflow_config/cloud-init/meta-data"
 network_config="/usr/local/bin/dockerflow_config/cloud-init/network-config"
 
@@ -62,13 +63,18 @@ CI_ISO="/var/lib/libvirt/images/${name}-cloudinit.iso"
 # Create dirs
 sudo mkdir -p /var/lib/libvirt/volumes /var/lib/libvirt/images
 
-# Prepare base volume
+
+# Prepare base volume as a small overlay on top of IMG_SRC
 if [[ "$format" == "qcow2" ]]; then
-  sudo qemu-img convert -f "$format" -O qcow2 "$IMG_SRC" "$BASE_VOL"
+  sudo qemu-img create -f qcow2 \
+    -o backing_fmt=qcow2 \
+    -b "$IMG_SRC" \
+    "$BASE_VOL" \
+    "20G"
 else
   sudo cp "$IMG_SRC" "$BASE_VOL"
+  sudo qemu-img resize "$BASE_VOL" "20G"
 fi
-
 # Create data volume
 sudo qemu-img create -f "$format" "$DATA_VOL" "${size}G"
 
