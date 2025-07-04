@@ -1,4 +1,3 @@
-
 #cloud-config
 hostname: kube-harbor
 
@@ -8,8 +7,8 @@ users:
     groups: wheel,docker
     shell: /bin/bash
     ssh_authorized_keys:
-     - ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQCtmamvpt1yrmm0yBHNCHmkdXrkye6Hv0z9ivIokJonm5Vi3HKsU+YHvwgn/LWsqF61VlJ0eFku/q3Z3uPby6Bw5j59b1MO5dAnKUClvFgoyvkvG50h85NXsYns8vaIwBb4m7SxYRdiEewVvqOVgdjeVODJBm/fMM5+pTHOKsb0jvAKVn99nFib9PT7LUPk36Au79HGcvkYJ5UX2eTjS8bAzxOlXl1DKgIlyXCJZJZGbFknM1SvWxt2ZwcBiT1vPylLcPtyeEJ2PjP421xBi8Iz8mmqi9WpfGdjhjoT/+OLoOqFPC4dSObcoiZc6ipJIlC5DoxuSZPMQ0UxGBHn70sNu17yGzrmdLPJBGdW7p80sa7cQSMlBEyI9mJsS3bVD9HzAYkTgLW/m7i2lb9mBasSINd6NNd0kHrF1rIXkZ1PH3QCNs0TaaQlC87EvEMMcZTl0G3LdFgetvbN5fnyEWJZcBVl6mHbIdbfPuteDDv1fZ0T+jfMiwL8hTNPkYHjRBk= hypervisoradmin@hypervisor
-    passwd: '$2y$10$abcdefghijklmnopqrstuvABCDEFGHIJ1234567890abcdef'
+     - ssh-rsa #youkey
+    passwd: 'password'
 
 packages:
   - docker
@@ -45,56 +44,63 @@ write_files:
     permissions: '0644'
 
 runcmd:
-  - [ systemctl, enable, "--now", docker ]
-  - [ systemctl, enable, "--now", rsyslog ]
-  - [ setsebool, -P, rsyslog_tcp_server, on ]
-  - [ semanage, port, "-a", "-t", "syslogd_port_t", "-p", "tcp", "1514" ]
+  # Uruchomienie i włączenie usług docker oraz rsyslog
+  - [ bash, "-c", "systemctl enable --now docker" ]
+  - [ bash, "-c", "systemctl enable --now rsyslog" ]
+  - [ bash, "-c", "setsebool -P rsyslog_tcp_server on" ]
+  - [ bash, "-c", "semanage port -a -t syslogd_port_t -p tcp 1514" ]
 
-  - [ mkdir, "-p", "/data", "/etc/harbor/ssl", "/harbor_cust_cert" ]
-  - [ chown, "-R", "10000:10000", "/data" ]
-  - [ chmod, "755", "/harbor_cust_cert" ]
+  # Przygotowanie katalogów i nadanie odpowiednich uprawnień
+  - [ bash, "-c", "mkdir -p /data /etc/harbor/ssl /harbor_cust_cert" ]
+  - [ bash, "-c", "chown -R 10000:10000 /data" ]
+  - [ bash, "-c", "chmod 755 /harbor_cust_cert" ]
 
-  - [ su, "-", "fedora", "-c", "docker pull goharbor/harbor-jobservice:v2.10.0" ]
-  - [ su, "-", "fedora", "-c", "docker pull goharbor/harbor-registry:v2.10.0" ]
+  # Pobranie obrazów Dockera dla Harbor
+  - [ bash, "-c", "su - fedora -c 'docker pull goharbor/harbor-jobservice:v2.10.0'" ]
+  - [ bash, "-c", "su - fedora -c 'docker pull goharbor/harbor-registry:v2.10.0'" ]
 
-  - [ bash, "-lc", "curl -Lo /usr/local/bin/kubectl https://storage.googleapis.com/kubernetes-release/release/$(curl -s https://storage.googleapis.com/kubernetes-release/release/stable.txt)/bin/linux/amd64/kubectl && chmod +x /usr/local/bin/kubectl && curl -Lo /tmp/helm.tar.gz https://get.helm.sh/helm-v3.12.0-linux-amd64.tar.gz && tar xzvf /tmp/helm.tar.gz -C /tmp && mv /tmp/linux-amd64/helm /usr/local/bin/helm && chmod +x /usr/local/bin/helm && rm -f /tmp/helm.tar.gz" ]
+  # Instalacja kubectl oraz helm
+  - [ bash, "-c", "curl -Lo /usr/local/bin/kubectl https://storage.googleapis.com/kubernetes-release/release/$(curl -s https://storage.googleapis.com/kubernetes-release/release/stable.txt)/bin/linux/amd64/kubectl && chmod +x /usr/local/bin/kubectl && curl -Lo /tmp/helm.tar.gz https://get.helm.sh/helm-v3.12.0-linux-amd64.tar.gz && tar xzvf /tmp/helm.tar.gz -C /tmp && mv /tmp/linux-amd64/helm /usr/local/bin/helm && chmod +x /usr/local/bin/helm && rm -f /tmp/helm.tar.gz" ]
 
-  - [ bash, "-lc", "curl -Lo /usr/local/bin/minikube https://storage.googleapis.com/minikube/releases/latest/minikube-linux-amd64 && chmod +x /usr/local/bin/minikube" ]
+  # Instalacja minikube
+  - [ bash, "-c", "curl -Lo /usr/local/bin/minikube https://storage.googleapis.com/minikube/releases/latest/minikube-linux-amd64 && chmod +x /usr/local/bin/minikube" ]
 
-  - [ su, "-", "fedora", "-c", "minikube start --driver=docker --memory=6144 --cpus=3 --disk-size=40g --apiserver-ips=192.168.122.101 --ports=30002:30002,30003:30003,30080:30080,30443:30443" ]
-  - [ su, "-", "fedora", "-c", "kubectl config use-context minikube" ]
+  # Uruchomienie minikube
+  - [ bash, "-c", "su - fedora -c 'minikube start --driver=docker --memory=6144 --cpus=3 --disk-size=40g --apiserver-ips=192.168.122.101 --ports=30002:30002,30003:30003,30080:30080,30443:30443,30090:30090'" ]
+  - [ bash, "-c", "su - fedora -c 'kubectl config use-context minikube'" ]
 
-  - [ su, "-", "fedora", "-c", "kubectl create namespace harbor || true" ]
-  - [ su, "-", "fedora", "-c", "kubectl create namespace gitea || true" ]
+  # Tworzenie namespace w Kubernetes
+  - [ bash, "-c", "su - fedora -c 'kubectl create namespace harbor || true'" ]
+  - [ bash, "-c", "su - fedora -c 'kubectl create namespace gitea || true'" ]
 
-  - [ su, "-", "fedora", "-c", "kubectl create secret generic harbor-passwords -n harbor --from-literal=admin-password=Harbor12345 --from-literal=database-password=HarborDB123" ]
-  - [ su, "-", "fedora", "-c", "kubectl create secret generic gitea-passwords -n gitea --from-literal=postgresql-password=GiteaDB123 --from-literal=pgpool-password=GiteaPool123 --from-literal=admin-password=GiteaAdmin123" ]
+  # Tworzenie sekretów
+  - [ bash, "-c", "su - fedora -c 'kubectl create secret generic harbor-passwords -n harbor --from-literal=admin-password=Harbor12345 --from-literal=database-password=HarborDB123'" ]
+  - [ bash, "-c", "su - fedora -c 'kubectl create secret generic gitea-passwords -n gitea --from-literal=postgresql-password=GiteaDB123 --from-literal=pgpool-password=GiteaPool123 --from-literal=admin-password=GiteaAdmin123'" ]
 
-  - [ su, "-", "fedora", "-c", "helm repo add harbor https://helm.goharbor.io && helm repo add gitea-charts https://dl.gitea.io/charts/ && helm repo update" ]
+  # Dodanie repozytoriów Helm i aktualizacja
+  - [ bash, "-c", "su - fedora -c 'helm repo add harbor https://helm.goharbor.io && helm repo add gitea-charts https://dl.gitea.io/charts/ && helm repo update'" ]
 
-  # POPRAWIONA INSTALACJA HARBOR Z NODE PORT
-  - [ su, "-", "fedora", "-c", "helm install my-harbor harbor/harbor --namespace harbor --set expose.type=NodePort --set expose.nodePort.ports.http.nodePort=30002 --set expose.nodePort.ports.https.nodePort=30003 --set externalURL=http://$(hostname -I | awk '{print $1}'):30002 --set harborAdminPassword=Harbor12345 --set expose.tls.enabled=false --set expose.tls.auto.commonName=$(hostname) --set persistence.persistentVolumeClaim.registry.size=20Gi --set persistence.persistentVolumeClaim.chartmuseum.size=5Gi --set persistence.persistentVolumeClaim.jobservice.size=1Gi --set persistence.persistentVolumeClaim.database.size=1Gi" ]
+  # Instalacja Harbor z NodePort i jednym serwisem NGINX
+  - [ bash, "-c", "su - fedora -c \"helm install my-harbor harbor/harbor --namespace harbor --set expose.type=NodePort --set expose.nodePort.ports.http.nodePort=30002 --set expose.nodePort.ports.https.nodePort=30003 --set expose.tls.enabled=false --set externalURL=http://$(hostname -I | awk '{print \\$1}'):30002 --set harborAdminPassword=Harbor12345 --set expose.tls.auto.commonName=$(hostname) --set persistence.persistentVolumeClaim.registry.size=20Gi --set persistence.persistentVolumeClaim.chartmuseum.size=5Gi --set persistence.persistentVolumeClaim.jobservice.size=1Gi --set persistence.persistentVolumeClaim.database.size=1Gi\"" ]
 
-  # POPRAWIONA INSTALACJA GITEA BEZ HA
-  - [ su, "-", "fedora", "-c", "helm install my-gitea gitea-charts/gitea --namespace gitea --set service.http.type=NodePort --set service.http.nodePort=30080 --set service.https.type=NodePort --set service.https.nodePort=30443 --set postgresql.enabled=true --set postgresql.postgresqlPassword=GiteaDB123 --set gitea.admin.password=GiteaAdmin123 --set postgresql-ha.enabled=false" ]
+  # Eksponowanie deploymentu Harbor NGINX jako NodePort i zmiana portu NodePort
+  - [ bash, "-c", "su - fedora -c 'kubectl expose deployment my-harbor-nginx -n harbor --name=harbor-nginx-nodeport --port=80 --target-port=8080 --type=NodePort'" ]
+  - [ bash, "-c", "su - fedora -c 'kubectl patch service harbor-nginx-nodeport -n harbor --type=json -p=\"[{\\\"op\\\": \\\"replace\\\", \\\"path\\\": \\\"/spec/ports/0/nodePort\\\", \\\"value\\\": 30090}]\"'" ]
 
-  # DODATKOWE USŁUGI NODE PORT DLA HARBORA
-  - [ su, "-", "fedora", "-c", "kubectl expose deployment my-harbor-core -n harbor --name=harbor-http --port=80 --target-port=8080 --type=NodePort" ]
-  - [ su, "-", "fedora", "-c", "kubectl expose deployment my-harbor-portal -n harbor --name=harbor-portal-http --port=80 --type=NodePort" ]
+  # Instalacja Gitea
+  - [ bash, "-c", "su - fedora -c 'helm install my-gitea gitea-charts/gitea --namespace gitea --set service.http.type=NodePort --set service.http.nodePort=30080 --set service.https.type=NodePort --set service.https.nodePort=30443 --set postgresql.enabled=true --set postgresql.postgresqlPassword=GiteaDB123 --set gitea.admin.password=GiteaAdmin123 --set postgresql-ha.enabled=false'" ]
 
-  # AKTUALIZACJA PORTÓW NODE PORT
-  - [ su, "-", "fedora", "-c", "kubectl patch service harbor-http -n harbor --type='json' -p='[{\"op\":\"replace\",\"path\":\"/spec/ports/0/nodePort\",\"value\":30002}]'" ]
-  - [ su, "-", "fedora", "-c", "kubectl patch service harbor-portal-http -n harbor --type='json' -p='[{\"op\":\"replace\",\"path\":\"/spec/ports/0/nodePort\",\"value\":30080}]'" ]
+  # Konfiguracja firewalld i otwarcie portów
+  - [ bash, "-c", "systemctl enable --now firewalld" ]
+  - [ bash, "-c", "firewall-cmd --permanent --add-port=30002/tcp" ]
+  - [ bash, "-c", "firewall-cmd --permanent --add-port=30003/tcp" ]
+  - [ bash, "-c", "firewall-cmd --permanent --add-port=30080/tcp" ]
+  - [ bash, "-c", "firewall-cmd --permanent --add-port=30090/tcp" ]
+  - [ bash, "-c", "firewall-cmd --permanent --add-port=30443/tcp" ]
+  - [ bash, "-c", "firewall-cmd --reload" ]
 
-  - [ systemctl, enable, "--now", firewalld ]
-  - [ firewall-cmd, "--permanent", "--add-port=30002/tcp" ]
-  - [ firewall-cmd, "--permanent", "--add-port=30003/tcp" ]
-  - [ firewall-cmd, "--permanent", "--add-port=30080/tcp" ]
-  - [ firewall-cmd, "--permanent", "--add-port=30443/tcp" ]
-  - [ firewall-cmd, "--reload" ]
-
-  # SKRYPT DEBUG Z AKTUALIZACJĄ
+  # Skrypt debug
   - [ bash, "-c", "echo '#!/bin/bash\nkubectl get pods -A\nkubectl get svc -A\nkubectl describe pod -n gitea -l app.kubernetes.io/name=gitea\nkubectl logs -n gitea my-gitea-postgresql-0' > /home/fedora/debug.sh" ]
-  - [ chmod, "+x", "/home/fedora/debug.sh" ]
-  - [ chown, "fedora:fedora", "/home/fedora/debug.sh" ]
-[hypervisoradmin@hypervisor cloud-init]$
+  - [ bash, "-c", "chmod +x /home/fedora/debug.sh" ]
+  - [ bash, "-c", "chown fedora:fedora /home/fedora/debug.sh" ]
+
