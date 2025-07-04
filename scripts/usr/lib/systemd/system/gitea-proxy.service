@@ -1,0 +1,12 @@
+[Unit]
+Description=Gitea Port Proxy
+After=network.target
+
+[Service]
+ExecStart=/usr/bin/socat TCP-LISTEN:30080,bind=0.0.0.0,fork,reuseaddr TCP:192.168.122.101:30080
+Restart=always
+RestartSec=5
+User=root
+
+[Install]
+WantedBy=multi-user.target
