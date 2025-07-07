@@ -2,7 +2,7 @@
   {
     "id": "deploy",
     "execute-command":        "/usr/local/bin/dockerflow_config/scripts/deploy.sh",
-    "command-working-directory": "/home/hypervisoradmin/project",
+    "command-working-directory": "/home/worker/project",
     "pass-arguments-to-command": [
       {
         "source": "payload",
@@ -21,3 +21,4 @@
       }
     }
   }
+]
