@@ -11,8 +11,8 @@
     project_root: "/home/hypervisoradmin/{{ project }}"
     repo_name: "my-repo"
     repo_dir: "{{ project_root }}/{{ repo_name }}"
-    harbor_url: "192.168.122.100"
-    gitea_url: "192.168.122.40:3000"
+    harbor_url: "192.168.122.101:30090"
+    gitea_url: "192.168.122.101:30080"
     token: ""
     expected_network: "{{ repo_name }}_app_net"
     backup_dir: "backup/{{ repo_name }}"
@@ -32,9 +32,9 @@
 
     - name: Clone repository
       git:
-        repo: "http://hyperadmin:{{ token }}@{{ gitea_url }}/hyperadmin/{{ repo_name }}.git"
+        repo: "http://gitea_admin:{{ token }}@{{ gitea_url }}/gitea_admin/{{ repo_name }}.git"
         dest: "{{ repo_dir }}"
-        version: test
+        version: main
 
     # ─────────────────────────────────────────────────────────────────────────
     # Parse Docker Compose in‑line
@@ -81,7 +81,7 @@
           ===== Service: {{ service_name }} =====
           Build Status:       {{ summary.build_status | upper }}
           Approval Status:    {{ summary.status | upper }}
-          
+
           Security Checks:
             - Resource Limits: {{ summary.security_checks.resource_limits }}
             - Network ({{ expected_network }}): {{ summary.security_checks.network }}
@@ -92,14 +92,14 @@
           Security Issues: {{ summary.issues | length }}
           CRITICAL Vulnerabilities: {{ summary.critical_vulns }}
           HIGH Vulnerabilities:     {{ summary.high_vulns }}
-          
+
           {% if summary.issues %}
           Security Issues:
           {% for issue in summary.issues %}
             - {{ issue }}
           {% endfor %}
           {% endif %}
-          
+
           {% if summary.build_status == 'skipped' %}
           Image Source: {{ summary.image_source }}
           {% endif %}
