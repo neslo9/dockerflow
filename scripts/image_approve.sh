@@ -2,57 +2,65 @@
 
 usage(){
     echo "Usage: dockerflow image-approve"
-    echo "  -i image ID (required)"
+    echo "  -i image ID (optional)"
+    echo "  -t target image tag (optional, e.g. myrepo:latest)"
     echo "  -s status (optional, default: approved)"
     echo "  -h show this message"
+    echo
+    echo "You must specify either -i or -t"
 }
 
 image_id=""
+target_image=""
 status="approved"
 
-while getopts "i:s:h" opt; do
+while getopts "i:t:s:h" opt; do
     case $opt in
         i) image_id="$OPTARG";;
+        t) target_image="$OPTARG";;
         s) status="$OPTARG";;
         h) usage; exit 0;;
         *) usage; exit 1;;
     esac
 done
 
-if [[ -z "$image_id" ]]; then
-    echo "Error: image ID is required."
+if [[ -z "$image_id" && -z "$target_image" ]]; then
+    echo "Error: either image ID (-i) or target image (-t) must be provided."
     usage
     exit 1
 fi
 
-# Szukanie lokalnych tagów dla danego image ID
-TAGS=$(docker images --format '{{.Repository}}:{{.Tag}} {{.ID}}' | grep "$image_id" | awk '{print $1}')
-
-if [[ -z "$TAGS" ]]; then
-    echo "No tags found for image ID: $image_id"
-    exit 2
+if [[ -n "$image_id" && -z "$target_image" ]]; then
+    TAGS=$(docker images --format '{{.Repository}}:{{.Tag}} {{.ID}}' | grep "$image_id" | awk '{print $1}')
+    if [[ -z "$TAGS" ]]; then
+        echo "No tags found for image ID: $image_id"
+        exit 2
+    fi
+    target_image=$(echo "$TAGS" | head -n1)
 fi
 
-# Wybierz pierwszy tag spośród dostępnych
-FIRST_TAG=$(echo "$TAGS" | head -n 1)
-IMAGE_NAME=$(echo "$FIRST_TAG" | cut -d':' -f1 | awk -F '/' '{print $NF}')
-LOCAL_TAG=$(echo "$FIRST_TAG" | cut -d':' -f2)
+# Wyciągnij nazwę serwisu jako repozytorium (np. "project/test_app1" -> "test_app1")
+service_name=$(echo "$target_image" | cut -d':' -f1 | awk -F '/' '{print $NF}')
 
-# Zmienne środowiskowe
-HARBOR_URL="192.168.122.100"
-PROJECT="project"
+project="project"
+harbor_url="192.168.122.101:30002"
+harbor_password="Olsen!eu4!cod"
+log_file="/var/log/dockerflow/history.csv"
 
-echo "Approving image:"
-echo "  Image ID   : $image_id"
-echo "  Name       : $IMAGE_NAME"
-echo "  Tag        : $LOCAL_TAG"
-echo "  Status     : $status"
+echo "Approving & tagging image:"
+echo "  Target Image  : $target_image"
+echo "  Service Name  : $service_name"
+echo "  Project       : $project"
+echo "  Status        : $status"
+echo "  Log File      : $log_file"
 echo
 
-# Uruchomienie playbooka
-ansible-playbook /usr/local/bin/dockerflow_config/playbooks/approve_push.yml \
-  -e "image_name=$IMAGE_NAME" \
-  -e "local_tag=$LOCAL_TAG" \
-  -e "harbor_url=$HARBOR_URL" \
-  -e "project=$PROJECT" \
-  -e "status=$status"
+ansible-playbook /usr/local/bin/dockerflow_config/playbooks/tag_and_push.yml \
+  -e "target_image=$target_image" \
+  -e "service_name=$service_name" \
+  -e "harbor_url=$harbor_url" \
+  -e "project=$project" \
+  -e "harbor_password=$harbor_password" \
+  -e "log_file=$log_file" \
+  -e "service_status=$status" \
+  -vv
