@@ -12,7 +12,7 @@ name=""
 date=""
 follow="false"
 
-while getopts "n:d:l:h" opt; do
+while getopts "n:d:lh" opt; do
     case $opt in
         n) name="$OPTARG";;
         d) date="$OPTARG";;
@@ -28,7 +28,7 @@ if [[ -z "$name" ]]; then
     exit 1
 fi
 
-log_dir="/var/log/dockerflow/ansible_logs/"
+log_dir="/var/log/dockerflow/ansible_logs"
 
 if [[ -n "$date" ]]; then
     matches=($(ls "$log_dir/${name}_${date}"*.log 2>/dev/null))
