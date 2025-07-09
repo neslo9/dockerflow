@@ -1,3 +1,4 @@
+
 #!/bin/bash
 
 show_help() {
@@ -8,7 +9,7 @@ show_help() {
   echo "  vm-start          Start a VM"
   echo "  vm-list           Lists all VMs"
   echo "  image-logs        List ansible pipline logs (tests) of docker image"
-  echo "  image-list        List of tested images" 
+  echo "  image-list        List of tested images"
   echo "  image-approve     Approve and push image to Harbor"
   echo "  masternode-spawn  Start and configure Node with Harbor and minikube"
   echo ""
