@@ -1,3 +1,4 @@
+
 - name: Extract just this service’s config
   set_fact:
     this_service: "{{ service_config[service] }}"
@@ -15,6 +16,13 @@
   set_fact:
     backup_tag: "backup-{{ timestamp }}"
     service_backup_dir: "{{ backup_dir }}/{{ service }}"
+
+- name: Ensure backup directory exists
+  file:
+    path: "{{ service_backup_dir }}"
+    state: directory
+    mode: '0755'
+
 - name: Backup existing image if exists
   block:
     - name: Check for existing image
@@ -35,7 +43,7 @@
 
     - name: Save old image to backup_dir (.tar)
       shell: >
-        docker save {{ image_name_only }}:{{ backup_tag }} 
+        docker save {{ image_name_only }}:{{ backup_tag }}
         -o "{{ service_backup_dir }}/{{ service }}_{{ backup_tag }}.tar"
       args:
         executable: /bin/bash
@@ -55,7 +63,7 @@
           path: "{{ repo_dir }}/{{ service_config.build.context | default('.') }}"
           dockerfile: "{{ service_config.build.dockerfile | default('Dockerfile') }}"
           args: "{{ service_config.build.args | default(omit) }}"
-      
+
     - name: Update image reference after build
       set_fact:
         # Important: This updates the image reference to use the newly built image
@@ -66,6 +74,13 @@
       set_fact:
         build_status: "failed"
         security_issues: "{{ security_issues + ['Build failed'] }}"
+
+- name: Stop and remove existing container if stuck
+  docker_container:
+    name: "{{ container_name }}"
+    state: absent
+    force_kill: true
+  ignore_errors: true
 
 - name: Start containers
   community.docker.docker_compose_v2:
@@ -101,7 +116,7 @@
 
 - name: Build service summary
   set_fact:
-    service_summary: 
+    service_summary:
       build_status: "{{ build_status }}"
       status: "{{ service_status }}"
       security_checks:
@@ -121,6 +136,16 @@
 
 - name: Tag and push if approved
   include_tasks: tag_and_push.yml
-  when: 
+  when:
     - build_status == 'built'
     - service_status == "approved"
+- name: Get image ID
+  command: docker images -q "{{ service_image }}:latest"
+  register: image_id_result
+  changed_when: false
+
+- name: Log deployment status
+  shell: |
+    mkdir -p /var/log/dockerflow
+    echo "$(date +'%Y-%m-%d %H:%M:%S'),{{ container_name | trim }},{{ service_status | trim }},{{ image_id_result.stdout | trim }}" \
+      >> /var/log/dockerflow/history.csv
