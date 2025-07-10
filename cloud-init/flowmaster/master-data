@@ -7,8 +7,8 @@ users:
     groups: wheel,docker
     shell: /bin/bash
     ssh_authorized_keys:
-     - ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQCtmamvpt1yrmm0yBHNCHmkdXrkye6Hv0z9ivIokJonm5Vi3HKsU+YHvwgn/LWsqF61VlJ0eFku/q3Z3uPby6Bw5j59b1MO5dAnKUClvFgoyvkvG50h85NXsYns8vaIwBb4m7SxYRdiEewVvqOVgdjeVODJBm/fMM5+pTHOKsb0jvAKVn99nFib9PT7LUPk36Au79HGcvkYJ5UX2eTjS8bAzxOlXl1DKgIlyXCJZJZGbFknM1SvWxt2ZwcBiT1vPylLcPtyeEJ2PjP421xBi8Iz8mmqi9WpfGdjhjoT/+OLoOqFPC4dSObcoiZc6ipJIlC5DoxuSZPMQ0UxGBHn70sNu17yGzrmdLPJBGdW7p80sa7cQSMlBEyI9mJsS3bVD9HzAYkTgLW/m7i2lb9mBasSINd6NNd0kHrF1rIXkZ1PH3QCNs0TaaQlC87EvEMMcZTl0G3LdFgetvbN5fnyEWJZcBVl6mHbIdbfPuteDDv1fZ0T+jfMiwL8hTNPkYHjRBk= hypervisoradmin@hypervisor
-    passwd: '$2y$10$abcdefghijklmnopqrstuvABCDEFGHIJ1234567890abcdef'
+     - ssh-rsa 
+    passwd: 
 
 packages:
   - docker
