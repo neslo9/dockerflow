@@ -44,7 +44,7 @@ service_name=$(echo "$target_image" | cut -d':' -f1 | awk -F '/' '{print $NF}')
 
 project="project"
 harbor_url="192.168.122.101:30002"
-harbor_password="Olsen!eu4!cod"
+harbor_password=""
 log_file="/var/log/dockerflow/history.csv"
 
 echo "Approving & tagging image:"
