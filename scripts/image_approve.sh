@@ -43,8 +43,7 @@ fi
 service_name=$(echo "$target_image" | cut -d':' -f1 | awk -F '/' '{print $NF}')
 
 project="project"
-harbor_url="192.168.122.101:30002"
-harbor_password=""
+harbor_url="harbor.app.dockerflow.local:30002"
 log_file="/var/log/dockerflow/history.csv"
 
 echo "Approving & tagging image:"
@@ -60,7 +59,7 @@ ansible-playbook /usr/local/bin/dockerflow_config/playbooks/tag_and_push.yml \
   -e "service_name=$service_name" \
   -e "harbor_url=$harbor_url" \
   -e "project=$project" \
-  -e "harbor_password=$harbor_password" \
   -e "log_file=$log_file" \
   -e "service_status=$status" \
   -vv
+
