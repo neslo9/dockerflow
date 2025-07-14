@@ -1,4 +1,3 @@
-
 - name: Tag and push Docker image to Harbor
   hosts: localhost
   connection: local
@@ -8,7 +7,6 @@
     harbor_url: "{{ harbor_url }}"
     project: "{{ project }}"
     service_name: "{{ service_name }}"
-    harbor_password: "{{ harbor_password }}"
 
   tasks:
     - name: Get artifact count from Harbor
@@ -16,7 +14,6 @@
         url: "http://{{ harbor_url }}/api/v2.0/repositories?q=name={{ project }}/{{ service_name }}"
         method: GET
         user: "admin"
-        password: "{{ harbor_password }}"
         force_basic_auth: yes
         status_code: 200
         validate_certs: no
