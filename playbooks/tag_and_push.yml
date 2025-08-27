@@ -1,19 +1,44 @@
-- name: Tag and push Docker image to Harbor
+---
+- name: Tag, push Docker image to Harbor, update DB and Kubernetes manifests
   hosts: localhost
   connection: local
   gather_facts: no
-
   vars:
-    harbor_url: "{{ harbor_url }}"
-    project: "{{ project }}"
-    service_name: "{{ service_name }}"
+    harbor_url:       "{{ harbor_url }}"
+    project:          "{{ project }}"
+    service_name:     "{{ service_name }}"
+    target_image:     "{{ target_image }}"
+    service_tag:      "{{ service_tag }}"
+    requested_tag:    "{{ new_tag | default('') }}"
+    docker_env:
+      DOCKER_HOST:       tcp://192.168.49.2:2376
+      DOCKER_TLS_VERIFY: "1"
+      DOCKER_CERT_PATH:  "/home/admin/.minikube/certs"
+
+    main_dir:              "/home/admin/{{ project }}/{{ service_name }}"
+    backup_dir:            "/home/admin/{{ project }}/backup/{{ service_name }}"
+    backup_manifest_dir:   "{{ backup_dir }}/{{ service_tag }}"
+    live_manifest:         "/path/to/live/deployment.yaml"  # <-- Upewnij się, że ta zmienna istnieje
 
   tasks:
-    - name: Get artifact count from Harbor
+    - name: Change manifest permission
+      become: yes
+      ansible.builtin.file:
+        path: "{{ item }}"
+        owner: admin
+        group: admin
+        mode: '0644'
+        state: file
+      loop:
+        - "{{ live_manifest }}"
+        - "{{ backup_manifest_dir }}/deployment.yaml"
+      ignore_errors: yes
+
+    - name: Get repository info (artifact count) from Harbor
       uri:
         url: "http://{{ harbor_url }}/api/v2.0/repositories?q=name={{ project }}/{{ service_name }}"
         method: GET
-        user: "admin"
+        user: admin
         force_basic_auth: yes
         status_code: 200
         validate_certs: no
@@ -24,22 +49,74 @@
       set_fact:
         next_version: "{{ (harbor_repo_info.json[0].artifact_count | default(0) | int) + 1 }}"
 
-    - name: Set new tag
+    - name: Decide approved_tag (override or v<next>)
       set_fact:
-        new_tag: "v{{ next_version }}"
+        approved_tag: "{{ requested_tag if requested_tag != '' else 'v' ~ next_version }}"
 
-    - name: Set remote image using new_tag
+    - name: Build remote_image variable
       set_fact:
-        remote_image: "{{ harbor_url }}/{{ project }}/{{ service_name }}:{{ new_tag }}"
-
-    - name: Debug tagging info
-      debug:
-        msg: "Tagging image '{{ target_image }}' as '{{ remote_image }}' (new_tag={{ new_tag }})"
+        remote_image: "{{ harbor_url }}/{{ project }}/{{ service_name }}:{{ approved_tag }}"
 
     - name: Tag image for Harbor
       command: docker tag "{{ target_image }}" "{{ remote_image }}"
+      environment: "{{ docker_env }}"
 
     - name: Push image to Harbor
       command: docker push "{{ remote_image }}"
-      environment:
-        DOCKER_CONFIG: "/home/admin/.docker"
+      environment: "{{ docker_env }}"
+
+    - name: Update deploy_status and image_tag in database
+      community.postgresql.postgresql_query:
+        db: "{{ DB_NAME }}"
+        login_host: "{{ DB_HOST }}"
+        login_port: "{{ DB_PORT | int }}"
+        login_user: "{{ DB_USER }}"
+        login_password: "{{ DB_PASSWORD }}"
+        query: |
+          UPDATE image_details
+          SET deploy_status = 'approved',
+              image_tag     = '{{ approved_tag }}'
+          WHERE image_name   = '{{ service_name }}'
+            AND image_tag    = '{{ service_tag }}'
+            AND deploy_status != 'approved';
+
+    - name: Check if backup folder exists
+      become: yes
+      ansible.builtin.stat:
+        path: "{{ backup_dir }}/{{ service_tag }}"
+      register: backup_dir_stat
+
+    - name: Check if main_dir exists
+      become: yes
+      ansible.builtin.stat:
+        path: "{{ main_dir }}"
+      register: main_dir_stat
+
+    - name: Copy main_dir to backup folder with approved_tag
+      become: yes
+      ansible.builtin.command:
+        cmd: cp -r "{{ main_dir }}" "{{ backup_dir }}/{{ approved_tag }}"
+      when:
+        - "'latest' in service_tag"
+        - main_dir_stat.stat.exists | default(false)
+
+    - name: Rename backup folder from service_tag to approved_tag
+      become: yes
+      ansible.builtin.command:
+        cmd: mv "{{ backup_dir }}/{{ service_tag }}" "{{ backup_dir }}/{{ approved_tag }}"
+      when:
+        - "'latest' not in service_tag"
+        - backup_dir_stat.stat.exists | default(false)
+
+    - name: Update backup manifest with new image
+      become: yes
+      ansible.builtin.replace:
+        path: "{{ backup_dir }}/{{ approved_tag }}/k8s/deployment.yaml"
+        regexp: '(^\s*image:\s*).+'
+        replace: '\1{{ remote_image }}'
+        backup: yes
+
+    - name: Remove local Docker image
+      become: yes
+      command: docker rmi "{{ target_image }}"
+      environment: "{{ docker_env }}"
